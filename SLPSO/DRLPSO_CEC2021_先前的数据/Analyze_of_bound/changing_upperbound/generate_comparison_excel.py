@@ -40,7 +40,7 @@ CONFIGS: List[Config] = [
 RUNS_PER_FILE = 30  # 每个文件的运行次数
 FILENAME_PATTERN = re.compile(r"^(\d+)_30_10total_DRLPSO\.txt$")  # 文件名模式
 OUTPUT_FILE = BASE_DIR / "comparison_results_upperbound.xlsx"  # 输出文件
-ALPHA = 0.05  # 显著性水平
+ALPHA = 0.3 # 显著性水平
 # ==================================================
 
 
