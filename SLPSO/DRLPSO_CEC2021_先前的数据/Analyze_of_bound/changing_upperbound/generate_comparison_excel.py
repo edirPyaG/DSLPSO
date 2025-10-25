@@ -40,7 +40,7 @@ CONFIGS: List[Config] = [
 RUNS_PER_FILE = 30  # 每个文件的运行次数
 FILENAME_PATTERN = re.compile(r"^(\d+)_30_10total_DRLPSO\.txt$")  # 文件名模式
 OUTPUT_FILE = BASE_DIR / "comparison_results_upperbound.xlsx"  # 输出文件
-ALPHA = 0.3 # 显著性水平
+ALPHA = 0.05# 显著性水平
 # ==================================================
 
 
@@ -129,21 +129,33 @@ def format_stats(data: np.ndarray) -> Tuple[str, float, float]:
 def perform_wilcoxon_test(baseline_data: np.ndarray, 
                           compare_data: np.ndarray,
                           baseline_mean: float,
-                          compare_mean: float) -> str:
+                          compare_mean: float,
+                          baseline_std: float,
+                          compare_std: float) -> str:
     """
     执行Wilcoxon符号秩检验并返回显著性符号
     
+    比较逻辑:
+    1. 对均值进行显著性检验
+    2. 如果均值有显著差异,则根据均值大小返回结果
+    3. 如果均值无显著差异,则对方差进行显著性检验
+    4. 如果方差有显著差异,则根据方差大小返回结果(越小越好)
+    5. 如果方差也无显著差异,则返回约等于符号
+    
     参数:
-        baseline_data: 基准数据
-        compare_data: 比较数据
+        baseline_data: 基准数据 (30次运行)
+        compare_data: 比较数据 (30次运行)
         baseline_mean: 基准均值
         compare_mean: 比较均值
+        baseline_std: 基准标准差
+        compare_std: 比较标准差
     
     返回:
         显著性符号: '+' (基准更好), '-' (比较更好), '≈' (无显著差异)
     """
+    # 第一步: 对均值进行Wilcoxon显著性检验
     try:
-        _, p_value = wilcoxon(
+        _, p_value_mean = wilcoxon(
             baseline_data,
             compare_data,
             zero_method="pratt",
@@ -152,16 +164,40 @@ def perform_wilcoxon_test(baseline_data: np.ndarray,
         )
     except ValueError:
         # 处理所有数据相同的情况
-        p_value = math.nan
+        p_value_mean = math.nan
     
-    # 判断显著性
-    if math.isnan(p_value) or p_value >= ALPHA:
-        return "≈"
-    else:
+    # 第二步: 如果均值有显著差异,直接根据均值比较
+    if not math.isnan(p_value_mean) and p_value_mean < ALPHA:
         if baseline_mean < compare_mean:
-            return "+"  # 基准更好
+            return "+"  # 基准均值更小,更好
         else:
-            return "-"  # 比较更好
+            return "-"  # 比较配置均值更小,更好
+    
+    # 第三步: 均值无显著差异,对方差(标准差)进行显著性检验
+    # 使用绝对偏差来比较方差的差异
+    baseline_abs_dev = np.abs(baseline_data - baseline_mean)
+    compare_abs_dev = np.abs(compare_data - compare_mean)
+    
+    try:
+        _, p_value_var = wilcoxon(
+            baseline_abs_dev,
+            compare_abs_dev,
+            zero_method="pratt",
+            alternative="two-sided",
+            mode="approx",
+        )
+    except ValueError:
+        p_value_var = math.nan
+    
+    # 第四步: 如果方差有显著差异,根据方差大小比较(越小越好)
+    if not math.isnan(p_value_var) and p_value_var < ALPHA:
+        if baseline_std < compare_std:
+            return "+"  # 基准方差更小,更稳定,更好
+        else:
+            return "-"  # 比较配置方差更小,更稳定,更好
+    
+    # 第五步: 均值和方差都无显著差异
+    return "≈"
 
 
 def evaluate_configs() -> pd.DataFrame:
@@ -228,13 +264,17 @@ def evaluate_configs() -> pd.DataFrame:
                 row[cfg.name] = "N/A"
                 continue
             
-            cfg_text, cfg_mean, _ = cfg_stats
+            cfg_text, cfg_mean, cfg_std = cfg_stats
             compare_runs = data_store[cfg.name][func_id]
             
-            # 执行Wilcoxon检验
+            # 获取基准标准差
+            _, _, baseline_std = stats_store[baseline_name][func_id]
+            
+            # 执行Wilcoxon检验 (增加标准差参数)
             symbol = perform_wilcoxon_test(
                 baseline_runs, compare_runs,
-                baseline_mean, cfg_mean
+                baseline_mean, cfg_mean,
+                baseline_std, cfg_std
             )
             
             # 更新计数器
